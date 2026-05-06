@@ -1,124 +1,108 @@
 """
-loader.py - Etape 1 : Chargement des donnees BDPM
-
-Telecharge et parse les fichiers CSV de la BDPM :
-- CIS_bdpm.txt        : specialites (nom, forme, voies, statut)
-- CIS_COMPO_bdpm.txt  : compositions (principes actifs, dosages)
-- CIS_CPD_bdpm.txt    : conditions de prescription et de delivrance
-
-Enrichit ensuite chaque medicament avec les donnees RCP scraped :
-- Contre-indications (section 4.3 du RCP)
-- Grossesse et allaitement (section 4.6 du RCP)
+loader.py - Etape 1 : Chargement des donnees BDPM (Version TP Corrigee)
 """
 
 import os
 import csv
 import requests
+import re
+import zipfile
 from tqdm import tqdm
 
-# Repertoire de stockage des donnees
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-
-# URLs des fichiers BDPM
-BASE_URL = "https://base-donnees-publique.medicaments.gouv.fr"
+# URL stable pour le ZIP des RCP sur data.gouv.fr
+URL_RCP_ZIP = "https://base-donnees-publique.medicaments.gouv.fr/download/file/CIS_RCP.zip"
 
 URLS = {
-    "CIS_bdpm.txt": f"{BASE_URL}/download/file/CIS_bdpm.txt",
-    "CIS_COMPO_bdpm.txt": f"{BASE_URL}/download/file/CIS_COMPO_bdpm.txt",
-    "CIS_CPD_bdpm.txt": f"{BASE_URL}/download/file/CIS_CPD_bdpm.txt",
+    "CIS_bdpm.txt": "https://base-donnees-publique.medicaments.gouv.fr/download/file/CIS_bdpm.txt",
+    "CIS_COMPO_bdpm.txt": "https://base-donnees-publique.medicaments.gouv.fr/download/file/CIS_COMPO_bdpm.txt",
+    "CIS_CPD_bdpm.txt": "https://base-donnees-publique.medicaments.gouv.fr/download/file/CIS_CPD_bdpm.txt",
 }
 
 
 def telecharger_fichier(nom: str, url: str) -> str:
-    """
-    Telecharge un fichier BDPM si non present localement.
-
-    Args:
-        nom: nom du fichier a sauvegarder
-        url: URL de telechargement
-
-    Returns:
-        Chemin local vers le fichier telecharge
-    """
     os.makedirs(DATA_DIR, exist_ok=True)
     chemin = os.path.join(DATA_DIR, nom)
+    
+    # Headers pour simuler un navigateur (evite certains blocages)
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
 
-    if os.path.exists(chemin):
-        print(f"  [OK] {nom} deja present (skip telechargement)")
+    if os.path.exists(chemin) and os.path.getsize(chemin) > 1000:
+        print(f"  [OK] {nom} deja present ({os.path.getsize(chemin)/1024/1024:.1f} Mo)")
         return chemin
 
     print(f"  [DL] Telechargement de {nom}...")
-    response = requests.get(url, stream=True, timeout=60)
-    response.raise_for_status()
-
-    taille_totale = int(response.headers.get("content-length", 0))
-    with open(chemin, "wb") as f, tqdm(
-        total=taille_totale, unit="B", unit_scale=True, desc=nom
-    ) as barre:
-        for chunk in response.iter_content(chunk_size=8192):
-            f.write(chunk)
-            barre.update(len(chunk))
-
-    print(f"  [OK] {nom} telecharge")
+    try:
+        response = requests.get(url, stream=True, timeout=120, headers=headers)
+        response.raise_for_status()
+        taille_totale = int(response.headers.get("content-length", 0))
+        
+        with open(chemin, "wb") as f, tqdm(total=taille_totale, unit="B", unit_scale=True, desc=nom) as barre:
+            for chunk in response.iter_content(chunk_size=32768):
+                if chunk:
+                    f.write(chunk)
+                    barre.update(len(chunk))
+        
+        if os.path.getsize(chemin) < 1000:
+            raise Exception("Le fichier telecharge est trop petit (erreur serveur ?)")
+            
+    except Exception as e:
+        if os.path.exists(chemin): os.remove(chemin)
+        print(f"  [!] Erreur DL {nom}: {e}")
+        raise
+        
     return chemin
 
 
-def lire_cis(chemin: str) -> dict:
-    """
-    Lit CIS_bdpm.txt : specialites pharmaceutiques.
+def extraire_rcp_zip():
+    """Telecharge et extrait le fichier CIS_RCP.zip."""
+    chemin_txt = os.path.join(DATA_DIR, "CIS_RCP.txt")
+    
+    # Si le fichier texte existe deja et n'est pas vide, pas besoin de re-telecharger
+    if os.path.exists(chemin_txt) and os.path.getsize(chemin_txt) > 1000:
+        print(f"  [OK] CIS_RCP.txt deja present ({os.path.getsize(chemin_txt)/1024/1024:.1f} Mo)")
+        return chemin_txt
+    
+    chemin_zip = telecharger_fichier("CIS_RCP.zip", URL_RCP_ZIP)
+    
+    # On extrait si le TXT n'existe pas ou est vide
+    if not os.path.exists(chemin_txt) or os.path.getsize(chemin_txt) == 0:
+        print(f"  [ZIP] Extraction de {chemin_zip}...")
+        with zipfile.ZipFile(chemin_zip, "r") as z:
+            z.extractall(DATA_DIR)
+        print(f"  [OK] Fichier extrait : {chemin_txt}")
+    return chemin_txt
 
-    Colonnes : CodeCIS, Denomination, Forme, Voies, Statut AMM,
-               Type procedure, Etat commercialisation, Date AMM,
-               Titulaire, Surveillance
-    """
+
+def lire_cis(chemin: str) -> dict:
     medicaments = {}
     with open(chemin, encoding="utf-8", errors="replace") as f:
         reader = csv.reader(f, delimiter="\t")
         for ligne in reader:
-            if len(ligne) < 9:
-                continue
+            if len(ligne) < 9: continue
             code_cis = ligne[0].strip()
             medicaments[code_cis] = {
-                "code_cis": code_cis,
-                "denomination": ligne[1].strip(),
-                "forme": ligne[2].strip(),
-                "voies": ligne[3].strip(),
-                "statut_amm": ligne[4].strip(),
-                "etat_commercialisation": ligne[6].strip(),
-                "titulaire": ligne[8].strip(),
-                # Champs enrichis (remplis par les autres parsers)
-                "compositions": [],
-                "conditions_prescription": [],
-                "indications": None,
-                "contre_indications": None,
-                "grossesse_allaitement": None,
+                "code_cis": code_cis, "denomination": ligne[1].strip(),
+                "forme": ligne[2].strip(), "voies": ligne[3].strip(),
+                "statut_amm": ligne[4].strip(), "etat_commercialisation": ligne[6].strip(),
+                "titulaire": ligne[8].strip(), "compositions": [],
+                "conditions_prescription": [], "indications": None,
+                "posologie": None, "contre_indications": None,
+                "interactions": None,
+                "grossesse_allaitement": None, "effets_indesirables": None,
             }
     return medicaments
 
 
 def lire_compositions(chemin: str, medicaments: dict) -> dict:
-    """
-    Lit CIS_COMPO_bdpm.txt : principes actifs et dosages.
-
-    Colonnes : CodeCIS, Element pharm., Code substance,
-               Denomination substance, Dosage, Ref dosage,
-               Nature composant, Liaison SA/FT
-
-    Filtre sur nature = 'SA' (substance active uniquement).
-    """
     with open(chemin, encoding="utf-8", errors="replace") as f:
         reader = csv.reader(f, delimiter="\t")
         for ligne in reader:
-            if len(ligne) < 6:
-                continue
+            if len(ligne) < 6: continue
             code_cis = ligne[0].strip()
-            if code_cis not in medicaments:
-                continue
-            substance = ligne[3].strip()
-            dosage = ligne[4].strip()
-            unite = ligne[5].strip()
-            nature = ligne[6].strip() if len(ligne) > 6 else ""
-            if nature == "SA" and substance:
+            if code_cis not in medicaments: continue
+            substance, dosage, unite = ligne[3].strip(), ligne[4].strip(), ligne[5].strip()
+            if (ligne[6] if len(ligne) > 6 else "") == "SA":
                 entry = f"{substance} {dosage} {unite}".strip()
                 if entry not in medicaments[code_cis]["compositions"]:
                     medicaments[code_cis]["compositions"].append(entry)
@@ -126,130 +110,144 @@ def lire_compositions(chemin: str, medicaments: dict) -> dict:
 
 
 def lire_conditions_prescription(chemin: str, medicaments: dict) -> dict:
-    """
-    Lit CIS_CPD_bdpm.txt : conditions de prescription et de delivrance.
-
-    Colonnes : CodeCIS, Condition de prescription ou delivrance
-
-    Exemples de valeurs :
-    - 'Liste I'
-    - 'Liste II'
-    - 'Stupefiant'
-    - 'Prescription hospitaliere'
-    - 'Prescription reservee aux specialistes en...'
-    """
     with open(chemin, encoding="utf-8", errors="replace") as f:
         reader = csv.reader(f, delimiter="\t")
         for ligne in reader:
-            if len(ligne) < 2:
-                continue
+            if len(ligne) < 2: continue
+            code_cis, cond = ligne[0].strip(), ligne[1].strip()
+            if code_cis in medicaments and cond not in medicaments[code_cis]["conditions_prescription"]:
+                medicaments[code_cis]["conditions_prescription"].append(cond)
+    return medicaments
+
+
+def lire_rcp_fichier(chemin: str, medicaments: dict) -> dict:
+    print("  [i] Lecture des notices completes (Latin-1)...")
+    import re
+    with open(chemin, encoding="latin-1", errors="replace") as f:
+        reader = csv.reader(f, delimiter="\t")
+        for ligne in reader:
+            if len(ligne) < 2: continue
             code_cis = ligne[0].strip()
-            if code_cis not in medicaments:
+            if code_cis not in medicaments: continue
+            texte = ligne[1]
+            
+            def extraire(num):
+                pattern = rf"(?si){re.escape(num)}[\s\.]+(?:[\w\s,']+)[:\.\-\n](.*?)(?=\n\s*\d\.\d|\n\s*\d\.)"
+                match = re.search(pattern, texte)
+                if match:
+                    res = re.sub(r'<[^>]+>', '', match.group(1))
+                    res = re.sub(r'\s+', ' ', res).strip()
+                    return res[:3000] if len(res) > 10 else None
+                return None
+
+            medicaments[code_cis]["indications"] = extraire("4.1")
+            medicaments[code_cis]["posologie"] = extraire("4.2")
+            medicaments[code_cis]["contre_indications"] = extraire("4.3")
+            medicaments[code_cis]["interactions"] = extraire("4.5")
+            medicaments[code_cis]["grossesse_allaitement"] = extraire("4.6")
+            medicaments[code_cis]["effets_indesirables"] = extraire("4.8")
+    return medicaments
+
+
+API_BDPM_URL = "https://api.medicaments.gouv.fr/1.0/medicaments"
+
+MOTS_CLES_DENOMINATON = [
+    "doliprane", "dafalgan", "efferalgan", "paracetamol", "paracétamol",
+    "ibuprofene", "ibuprofène", "advil", "nurofen",
+    "aspirine", "aspirin", "aspegic", "aspégic",
+    "amoxicilline", "augmentin",
+    "smecta", "imodium",
+    "ventoline", "becotide",
+    "omeprazole", "oméprazole", "inexium",
+    "metformine", "glucophage",
+]
+
+
+def charger_depuis_api() -> list:
+    """
+    Option 2 du sujet : charge les médicaments via l'API REST officielle BDPM.
+    Retourne une liste de dicts au même format que charger_medicaments().
+    """
+    print("  [API] Interrogation de l'API BDPM...")
+    medicaments = []
+    seen_cis = set()
+
+    for mot in MOTS_CLES_DENOMINATON:
+        try:
+            resp = requests.get(
+                API_BDPM_URL,
+                params={"denomination": mot},
+                timeout=15,
+                headers={"User-Agent": "RAG-Assistant-Medicaments/1.0"},
+            )
+            if resp.status_code != 200:
                 continue
-            condition = ligne[1].strip()
-            if condition and condition not in medicaments[code_cis]["conditions_prescription"]:
-                medicaments[code_cis]["conditions_prescription"].append(condition)
+            for item in resp.json():
+                cis = str(item.get("codeCIS", ""))
+                if not cis or cis in seen_cis:
+                    continue
+                seen_cis.add(cis)
+                medicaments.append({
+                    "code_cis": cis,
+                    "denomination": item.get("denomination", ""),
+                    "forme": item.get("formePharmaceutique", ""),
+                    "voies": item.get("voiesAdministration", ""),
+                    "statut_amm": item.get("statutAMM", ""),
+                    "etat_commercialisation": item.get("etatCommercialisation", "Commercialisée"),
+                    "titulaire": item.get("titulaire", ""),
+                    "compositions": [],
+                    "conditions_prescription": [],
+                    "indications": None,
+                    "posologie": None,
+                    "contre_indications": None,
+                    "interactions": None,
+                    "grossesse_allaitement": None,
+                    "effets_indesirables": None,
+                })
+        except Exception as e:
+            print(f"  [!] API: erreur pour '{mot}': {e}")
+
+    print(f"  [API] {len(medicaments)} medicaments recuperes")
     return medicaments
 
 
-def enrichir_avec_rcp(medicaments: dict, cache_rcp: dict) -> dict:
-    """
-    Enrichit chaque medicament avec les donnees RCP (indications, contre-indications, grossesse).
-
-    Args:
-        medicaments: dict {cis -> infos medicament}
-        cache_rcp: dict {cis -> {"indications": str, "contre_indications": str, "grossesse_allaitement": str}}
-
-    Returns:
-        Dict medicaments enrichi
-    """
-    n_enrichis = 0
-    for cis, med in medicaments.items():
-        if cis in cache_rcp:
-            rcp = cache_rcp[cis]
-            med["indications"] = rcp.get("indications")
-            med["contre_indications"] = rcp.get("contre_indications")
-            med["grossesse_allaitement"] = rcp.get("grossesse_allaitement")
-            if rcp.get("contre_indications") or rcp.get("grossesse_allaitement") or rcp.get("indications"):
-                n_enrichis += 1
-    print(f"  [OK] {n_enrichis} medicaments enrichis avec donnees RCP")
+def _enrichir_depuis_scraper(medicaments: dict) -> dict:
+    """Fallback : enrichit les données RCP via scraping individuel."""
+    from src.rcp_scraper import scraper_tous_rcp
+    cis_codes = list(medicaments.keys())
+    cache = scraper_tous_rcp(cis_codes)
+    for cis, data in cache.items():
+        if cis not in medicaments:
+            continue
+        for champ in ("indications", "posologie", "contre_indications", "interactions", "grossesse_allaitement", "effets_indesirables"):
+            if data.get(champ):
+                medicaments[cis][champ] = data[champ]
     return medicaments
 
 
-def charger_medicaments(avec_rcp: bool = True) -> list:
-    """
-    Point d'entree principal.
-
-    Telecharge les fichiers CSV BDPM, les parse, puis enrichit
-    optionnellement avec les donnees RCP (contre-indications, grossesse).
-
-    Args:
-        avec_rcp: si True, scrape les RCP (lent, ~10min pour tous les medics)
-
-    Returns:
-        Liste de dicts medicament avec cles :
-        code_cis, denomination, forme, voies, statut_amm,
-        etat_commercialisation, titulaire, compositions,
-        conditions_prescription, contre_indications, grossesse_allaitement
-    """
+def charger_medicaments() -> list:
     print("\n[BDPM] Chargement des donnees...")
+    telecharger_fichier("CIS_bdpm.txt", URLS["CIS_bdpm.txt"])
+    telecharger_fichier("CIS_COMPO_bdpm.txt", URLS["CIS_COMPO_bdpm.txt"])
+    telecharger_fichier("CIS_CPD_bdpm.txt", URLS["CIS_CPD_bdpm.txt"])
 
-    # Telechargement des fichiers CSV
-    chemin_cis = telecharger_fichier("CIS_bdpm.txt", URLS["CIS_bdpm.txt"])
-    chemin_compo = telecharger_fichier("CIS_COMPO_bdpm.txt", URLS["CIS_COMPO_bdpm.txt"])
-    chemin_cpd = telecharger_fichier("CIS_CPD_bdpm.txt", URLS["CIS_CPD_bdpm.txt"])
+    medicaments = lire_cis(os.path.join(DATA_DIR, "CIS_bdpm.txt"))
+    medicaments = lire_compositions(os.path.join(DATA_DIR, "CIS_COMPO_bdpm.txt"), medicaments)
+    medicaments = lire_conditions_prescription(os.path.join(DATA_DIR, "CIS_CPD_bdpm.txt"), medicaments)
 
-    # Parsing des specialites
-    print("  [i] Lecture des specialites...")
-    medicaments = lire_cis(chemin_cis)
-    print(f"  [OK] {len(medicaments)} specialites chargees")
+    mots_cles_tp = ["doliprane", "dafalgan", "efferalgan", "paracetamol", "paracétamol", "ibuprofene", "ibuprofène", "advil", "nurofen", "aspirine", "aspirin", "aspegic", "aspégic", "amoxicilline", "augmentin", "smecta", "imodium", "ventoline", "becotide", "omeprazole", "oméprazole", "inexium", "metformine", "glucophage"]
 
-    # Ajout des compositions
-    print("  [i] Lecture des compositions...")
-    medicaments = lire_compositions(chemin_compo, medicaments)
+    commercialises = {cis: m for cis, m in medicaments.items()
+                      if "Commercialis" in m["etat_commercialisation"]
+                      and any(mot in m["denomination"].lower() for mot in mots_cles_tp)}
 
-    # Ajout des conditions de prescription
-    print("  [i] Lecture des conditions de prescription...")
-    medicaments = lire_conditions_prescription(chemin_cpd, medicaments)
-
-    # Filtrage : uniquement les medicaments commercialises et ciblant le corpus restreint du TP
-    mots_cles_tp = [
-        "doliprane", "dafalgan", "efferalgan", "paracetamol", "paracétamol",
-        "ibuprofene", "ibuprofène", "advil", "nurofen",
-        "aspirine", "aspirin", "aspegic", "aspégic",
-        "amoxicilline", "augmentin",
-        "smecta", "imodium",
-        "ventoline", "becotide",
-        "omeprazole", "oméprazole", "inexium",
-        "metformine", "glucophage"
-    ]
-    
-    commercialises = {}
-    for cis, m in medicaments.items():
-        if "Commercialis" in m["etat_commercialisation"]:
-            denom = m["denomination"].lower()
-            if any(mot in denom for mot in mots_cles_tp):
-                commercialises[cis] = m
-                
-    print(f"  [OK] {len(commercialises)} medicaments du corpus restreint (TP) retenus")
-
-    # Enrichissement RCP (scraping)
-    if avec_rcp:
-        from src.rcp_scraper import scraper_tous_rcp
-        cis_codes = list(commercialises.keys())
-        print(f"\n[RCP] Enrichissement avec donnees RCP ({len(cis_codes)} medicaments)...")
-        cache_rcp = scraper_tous_rcp(cis_codes)
-        commercialises = enrichir_avec_rcp(commercialises, cache_rcp)
+    # Tentative de chargement depuis le ZIP ; fallback scraping si indisponible
+    try:
+        chemin_rcp = extraire_rcp_zip()
+        commercialises = lire_rcp_fichier(chemin_rcp, commercialises)
+    except Exception as e:
+        print(f"  [!] ZIP RCP indisponible ({e})")
+        print("  [>] Fallback : scraping des RCP individuels (plus lent)...")
+        commercialises = _enrichir_depuis_scraper(commercialises)
 
     return list(commercialises.values())
-
-
-if __name__ == "__main__":
-    # Test sans RCP (rapide)
-    medicaments = charger_medicaments(avec_rcp=False)
-    exemple = medicaments[0]
-    print(f"\nExemple : {exemple['denomination']}")
-    print(f"  Forme        : {exemple['forme']}")
-    print(f"  Voies        : {exemple['voies']}")
-    print(f"  Compo        : {', '.join(exemple['compositions'][:3])}")
-    print(f"  Prescription : {', '.join(exemple['conditions_prescription'])}")

@@ -108,8 +108,11 @@ def main(avec_reformulation: bool = True):
         # Bonus B : score de confiance insuffisant
         if not resultat_retriever["confiance_ok"]:
             print("\n  [!] Score de confiance trop faible.")
-            print("  Je n'ai pas trouve d'information directement pertinente dans ma base de donnees.")
-            print("\n  [!] Consultez un professionnel de sante pour toute question medicale.")
+            print("  Cette question depasse le perimetre des medicaments indexes dans ma base de donnees.")
+            print("  Medicaments couverts : Doliprane, Dafalgan, Efferalgan, Advil, Nurofen, Aspirin,")
+            print("  Aspegic, Amoxicilline, Augmentin, Smecta, Imodium, Ventoline, Becotide,")
+            print("  Omeprazole, Inexium, Metformine, Glucophage.")
+            print("\n  Ces informations ne remplacent pas l'avis d'un professionnel de sante.")
             continue
 
         chunks_pertinents = resultat_retriever["resultats"]

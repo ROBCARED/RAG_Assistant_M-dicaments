@@ -25,54 +25,55 @@ MAX_WORKERS = 8
 TIMEOUT = 10
 
 
-def _extraire_section_apres(lignes: list, titre: str, prochains_titres: list, max_chars: int = 1000) -> str:
+import re
+
+def _extraire_section_regex(texte: str, numero_section: str, max_chars: int = 1000) -> str:
     """
-    Extrait le texte d'une section identifiee par son titre.
-    S'arrete quand un des 'prochains_titres' est rencontre.
-
-    Args:
-        lignes: liste des lignes de texte nettoyees
-        titre: chaine a rechercher comme debut de section
-        prochains_titres: titres des sections suivantes (fin de la section)
-        max_chars: longueur maximale du texte extrait
-
-    Returns:
-        Texte de la section ou None si section absente
+    Extrait une section du RCP en utilisant des expressions régulières.
+    Plus robuste que la recherche de ligne simple.
     """
-    debut = None
-    for i, ligne in enumerate(lignes):
-        if titre.lower() in ligne.lower():
-            debut = i + 1
-            break
-
-    if debut is None:
+    # Pattern : Cherche un début de ligne ou un saut de ligne suivi du numéro de section (ex: 4.1)
+    # S'arrête à la section suivante (ex: 4.2) ou à une autre section majeure.
+    
+    if numero_section == "4.1":
+        pattern = r"(?s)4\.1\s*[\.\-]?\s*Indications therapeutiques(.*?)(?=4\.2|4\.3|4\.4|4\.5|4\.6|5\.)"
+    elif numero_section == "4.2":
+        pattern = r"(?s)4\.2\s*[\.\-]?\s*Posologie\s*(?:et\s*mode\s*d.administration)?(.*?)(?=4\.3|4\.4|4\.5|5\.)"
+    elif numero_section == "4.3":
+        pattern = r"(?s)4\.3\s*[\.\-]?\s*Contre-indications(.*?)(?=4\.4|4\.5|4\.6|4\.7|4\.8|5\.)"
+    elif numero_section == "4.5":
+        pattern = r"(?s)4\.5\s*[\.\-]?\s*Interactions\s*(?:avec\s*d.autres\s*m.dicaments)?(.*?)(?=4\.6|4\.7|4\.8|5\.)"
+    elif numero_section == "4.6":
+        pattern = r"(?s)4\.6\s*[\.\-]?\s*(?:Fertilite, )?grossesse et allaitement(.*?)(?=4\.7|4\.8|4\.9|5\.)"
+    elif numero_section == "4.8":
+        pattern = r"(?s)4\.8\s*[\.\-]?\s*Effets\s*ind.sirables(.*?)(?=4\.9|5\.)"
+    else:
         return None
 
-    parties = []
-    for ligne in lignes[debut:]:
-        # Arret si on arrive a la section suivante
-        if any(t.lower() in ligne.lower() for t in prochains_titres):
-            break
-        if ligne.strip():
-            parties.append(ligne.strip())
-
-    texte = " ".join(parties)
-    return texte[:max_chars] if texte.strip() else None
-
+    match = re.search(pattern, texte, re.IGNORECASE)
+    if match:
+        contenu = match.group(1).strip()
+        # Nettoyage minimal des sauts de ligne multiples
+        contenu = re.sub(r'\n+', ' ', contenu)
+        contenu = re.sub(r'\s+', ' ', contenu)
+        return contenu[:max_chars]
+    
+    return None
 
 def scraper_rcp_medicament(cis: str) -> dict:
     """
     Scrape le RCP d'un medicament identifie par son code CIS.
-
-    Args:
-        cis: code CIS du medicament
-
-    Returns:
-        Dict avec cles 'contre_indications', 'grossesse_allaitement'
-        (None si section absente ou erreur)
+    Utilise désormais des REGEX pour une extraction précise.
     """
     url = BASE_URL.format(cis=cis)
-    result = {"indications": None, "contre_indications": None, "grossesse_allaitement": None}
+    result = {
+        "indications": None,
+        "posologie": None,
+        "contre_indications": None,
+        "interactions": None,
+        "grossesse_allaitement": None,
+        "effets_indesirables": None,
+    }
 
     try:
         r = requests.get(url, timeout=TIMEOUT)
@@ -80,35 +81,17 @@ def scraper_rcp_medicament(cis: str) -> dict:
             return result
 
         soup = BeautifulSoup(r.content, "html.parser")
-        texte = soup.get_text(separator="\n")
-        lignes = [l.strip() for l in texte.splitlines() if l.strip()]
+        texte_complet = soup.get_text(separator="\n")
 
-        # Section 4.1 - Indications therapeutiques
-        result["indications"] = _extraire_section_apres(
-            lignes,
-            titre="4.1",
-            prochains_titres=["4.2", "4.3", "4.4", "4.5", "4.6"],
-            max_chars=800,
-        )
+        result["indications"]           = _extraire_section_regex(texte_complet, "4.1", max_chars=1200)
+        result["posologie"]             = _extraire_section_regex(texte_complet, "4.2", max_chars=1500)
+        result["contre_indications"]    = _extraire_section_regex(texte_complet, "4.3", max_chars=1200)
+        result["interactions"]          = _extraire_section_regex(texte_complet, "4.5", max_chars=1500)
+        result["grossesse_allaitement"] = _extraire_section_regex(texte_complet, "4.6", max_chars=1200)
+        result["effets_indesirables"]   = _extraire_section_regex(texte_complet, "4.8", max_chars=1500)
 
-        # Section 4.3 - Contre-indications
-        result["contre_indications"] = _extraire_section_apres(
-            lignes,
-            titre="4.3",
-            prochains_titres=["4.4", "4.5", "4.6", "4.7", "4.8"],
-            max_chars=800,
-        )
-
-        # Section 4.6 - Grossesse et allaitement
-        result["grossesse_allaitement"] = _extraire_section_apres(
-            lignes,
-            titre="4.6",
-            prochains_titres=["4.7", "4.8", "4.9", "5.", "Fertilite"],
-            max_chars=800,
-        )
-
-    except Exception:
-        pass  # Retourne les None en cas d'erreur reseau
+    except Exception as e:
+        print(f"Erreur scraping CIS {cis}: {e}")
 
     return result
 

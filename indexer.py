@@ -33,7 +33,7 @@ def main():
 
     # Etape 2 : Chunking
     print("\n[2/4] Decoupage en chunks...")
-    chunks = chunker_medicaments(medicaments, taille_max=500, overlap=50)
+    chunks = chunker_medicaments(medicaments, taille_max=1000, overlap=100)
     print(f"  -> {len(chunks)} chunks crees")
 
     # Etape 3 : Chargement du modele d'embedding
