@@ -1,7 +1,3 @@
-"""
-loader.py - Etape 1 : Chargement des donnees BDPM (Version TP Corrigee)
-"""
-
 import os
 import csv
 import requests
@@ -10,7 +6,7 @@ import zipfile
 from tqdm import tqdm
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-# URL stable pour le ZIP des RCP sur data.gouv.fr
+
 URL_RCP_ZIP = "https://base-donnees-publique.medicaments.gouv.fr/download/file/CIS_RCP.zip"
 
 URLS = {
@@ -19,12 +15,22 @@ URLS = {
     "CIS_CPD_bdpm.txt": "https://base-donnees-publique.medicaments.gouv.fr/download/file/CIS_CPD_bdpm.txt",
 }
 
+MOTS_CLES = [
+    "doliprane", "dafalgan", "efferalgan", "paracetamol", "paracétamol",
+    "ibuprofene", "ibuprofène", "advil", "nurofen",
+    "aspirine", "aspirin", "aspegic", "aspégic",
+    "amoxicilline", "augmentin",
+    "smecta", "imodium",
+    "ventoline", "becotide",
+    "omeprazole", "oméprazole", "inexium",
+    "metformine", "glucophage",
+]
+
 
 def telecharger_fichier(nom: str, url: str) -> str:
     os.makedirs(DATA_DIR, exist_ok=True)
     chemin = os.path.join(DATA_DIR, nom)
-    
-    # Headers pour simuler un navigateur (evite certains blocages)
+
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
 
     if os.path.exists(chemin) and os.path.getsize(chemin) > 1000:
@@ -36,36 +42,34 @@ def telecharger_fichier(nom: str, url: str) -> str:
         response = requests.get(url, stream=True, timeout=120, headers=headers)
         response.raise_for_status()
         taille_totale = int(response.headers.get("content-length", 0))
-        
+
         with open(chemin, "wb") as f, tqdm(total=taille_totale, unit="B", unit_scale=True, desc=nom) as barre:
             for chunk in response.iter_content(chunk_size=32768):
                 if chunk:
                     f.write(chunk)
                     barre.update(len(chunk))
-        
+
         if os.path.getsize(chemin) < 1000:
             raise Exception("Le fichier telecharge est trop petit (erreur serveur ?)")
-            
+
     except Exception as e:
-        if os.path.exists(chemin): os.remove(chemin)
+        if os.path.exists(chemin):
+            os.remove(chemin)
         print(f"  [!] Erreur DL {nom}: {e}")
         raise
-        
+
     return chemin
 
 
 def extraire_rcp_zip():
-    """Telecharge et extrait le fichier CIS_RCP.zip."""
     chemin_txt = os.path.join(DATA_DIR, "CIS_RCP.txt")
-    
-    # Si le fichier texte existe deja et n'est pas vide, pas besoin de re-telecharger
+
     if os.path.exists(chemin_txt) and os.path.getsize(chemin_txt) > 1000:
         print(f"  [OK] CIS_RCP.txt deja present ({os.path.getsize(chemin_txt)/1024/1024:.1f} Mo)")
         return chemin_txt
-    
+
     chemin_zip = telecharger_fichier("CIS_RCP.zip", URL_RCP_ZIP)
-    
-    # On extrait si le TXT n'existe pas ou est vide
+
     if not os.path.exists(chemin_txt) or os.path.getsize(chemin_txt) == 0:
         print(f"  [ZIP] Extraction de {chemin_zip}...")
         with zipfile.ZipFile(chemin_zip, "r") as z:
@@ -79,7 +83,8 @@ def lire_cis(chemin: str) -> dict:
     with open(chemin, encoding="utf-8", errors="replace") as f:
         reader = csv.reader(f, delimiter="\t")
         for ligne in reader:
-            if len(ligne) < 9: continue
+            if len(ligne) < 9:
+                continue
             code_cis = ligne[0].strip()
             medicaments[code_cis] = {
                 "code_cis": code_cis, "denomination": ligne[1].strip(),
@@ -98,9 +103,11 @@ def lire_compositions(chemin: str, medicaments: dict) -> dict:
     with open(chemin, encoding="utf-8", errors="replace") as f:
         reader = csv.reader(f, delimiter="\t")
         for ligne in reader:
-            if len(ligne) < 6: continue
+            if len(ligne) < 6:
+                continue
             code_cis = ligne[0].strip()
-            if code_cis not in medicaments: continue
+            if code_cis not in medicaments:
+                continue
             substance, dosage, unite = ligne[3].strip(), ligne[4].strip(), ligne[5].strip()
             if (ligne[6] if len(ligne) > 6 else "") == "SA":
                 entry = f"{substance} {dosage} {unite}".strip()
@@ -113,7 +120,8 @@ def lire_conditions_prescription(chemin: str, medicaments: dict) -> dict:
     with open(chemin, encoding="utf-8", errors="replace") as f:
         reader = csv.reader(f, delimiter="\t")
         for ligne in reader:
-            if len(ligne) < 2: continue
+            if len(ligne) < 2:
+                continue
             code_cis, cond = ligne[0].strip(), ligne[1].strip()
             if code_cis in medicaments and cond not in medicaments[code_cis]["conditions_prescription"]:
                 medicaments[code_cis]["conditions_prescription"].append(cond)
@@ -122,15 +130,16 @@ def lire_conditions_prescription(chemin: str, medicaments: dict) -> dict:
 
 def lire_rcp_fichier(chemin: str, medicaments: dict) -> dict:
     print("  [i] Lecture des notices completes (Latin-1)...")
-    import re
     with open(chemin, encoding="latin-1", errors="replace") as f:
         reader = csv.reader(f, delimiter="\t")
         for ligne in reader:
-            if len(ligne) < 2: continue
+            if len(ligne) < 2:
+                continue
             code_cis = ligne[0].strip()
-            if code_cis not in medicaments: continue
+            if code_cis not in medicaments:
+                continue
             texte = ligne[1]
-            
+
             def extraire(num):
                 pattern = rf"(?si){re.escape(num)}[\s\.]+(?:[\w\s,']+)[:\.\-\n](.*?)(?=\n\s*\d\.\d|\n\s*\d\.)"
                 match = re.search(pattern, texte)
@@ -151,28 +160,13 @@ def lire_rcp_fichier(chemin: str, medicaments: dict) -> dict:
 
 API_BDPM_URL = "https://api.medicaments.gouv.fr/1.0/medicaments"
 
-MOTS_CLES_DENOMINATON = [
-    "doliprane", "dafalgan", "efferalgan", "paracetamol", "paracétamol",
-    "ibuprofene", "ibuprofène", "advil", "nurofen",
-    "aspirine", "aspirin", "aspegic", "aspégic",
-    "amoxicilline", "augmentin",
-    "smecta", "imodium",
-    "ventoline", "becotide",
-    "omeprazole", "oméprazole", "inexium",
-    "metformine", "glucophage",
-]
-
 
 def charger_depuis_api() -> list:
-    """
-    Option 2 du sujet : charge les médicaments via l'API REST officielle BDPM.
-    Retourne une liste de dicts au même format que charger_medicaments().
-    """
     print("  [API] Interrogation de l'API BDPM...")
     medicaments = []
     seen_cis = set()
 
-    for mot in MOTS_CLES_DENOMINATON:
+    for mot in MOTS_CLES:
         try:
             resp = requests.get(
                 API_BDPM_URL,
@@ -212,7 +206,6 @@ def charger_depuis_api() -> list:
 
 
 def _enrichir_depuis_scraper(medicaments: dict) -> dict:
-    """Fallback : enrichit les données RCP via scraping individuel."""
     from src.rcp_scraper import scraper_tous_rcp
     cis_codes = list(medicaments.keys())
     cache = scraper_tous_rcp(cis_codes)
@@ -235,13 +228,10 @@ def charger_medicaments() -> list:
     medicaments = lire_compositions(os.path.join(DATA_DIR, "CIS_COMPO_bdpm.txt"), medicaments)
     medicaments = lire_conditions_prescription(os.path.join(DATA_DIR, "CIS_CPD_bdpm.txt"), medicaments)
 
-    mots_cles_tp = ["doliprane", "dafalgan", "efferalgan", "paracetamol", "paracétamol", "ibuprofene", "ibuprofène", "advil", "nurofen", "aspirine", "aspirin", "aspegic", "aspégic", "amoxicilline", "augmentin", "smecta", "imodium", "ventoline", "becotide", "omeprazole", "oméprazole", "inexium", "metformine", "glucophage"]
-
     commercialises = {cis: m for cis, m in medicaments.items()
                       if "Commercialis" in m["etat_commercialisation"]
-                      and any(mot in m["denomination"].lower() for mot in mots_cles_tp)}
+                      and any(mot in m["denomination"].lower() for mot in MOTS_CLES)}
 
-    # Tentative de chargement depuis le ZIP ; fallback scraping si indisponible
     try:
         chemin_rcp = extraire_rcp_zip()
         commercialises = lire_rcp_fichier(chemin_rcp, commercialises)
