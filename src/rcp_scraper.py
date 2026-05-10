@@ -1,18 +1,7 @@
-"""
-rcp_scraper.py - Scraping des RCP (Resume des Caracteristiques du Produit)
-
-Telecharge et parse les pages RCP de la BDPM pour extraire :
-- Section 4.3 : Contre-indications
-- Section 4.6 : Grossesse et allaitement
-
-Utilise un cache JSON pour eviter les re-telechargements.
-Le scraping est parallelise (10 threads) pour rester rapide.
-"""
-
 import os
 import json
+import re
 import requests
-import time
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
@@ -25,16 +14,7 @@ MAX_WORKERS = 8
 TIMEOUT = 10
 
 
-import re
-
 def _extraire_section_regex(texte: str, numero_section: str, max_chars: int = 1000) -> str:
-    """
-    Extrait une section du RCP en utilisant des expressions régulières.
-    Plus robuste que la recherche de ligne simple.
-    """
-    # Pattern : Cherche un début de ligne ou un saut de ligne suivi du numéro de section (ex: 4.1)
-    # S'arrête à la section suivante (ex: 4.2) ou à une autre section majeure.
-    
     if numero_section == "4.1":
         pattern = r"(?s)4\.1\s*[\.\-]?\s*Indications therapeutiques(.*?)(?=4\.2|4\.3|4\.4|4\.5|4\.6|5\.)"
     elif numero_section == "4.2":
@@ -53,18 +33,13 @@ def _extraire_section_regex(texte: str, numero_section: str, max_chars: int = 10
     match = re.search(pattern, texte, re.IGNORECASE)
     if match:
         contenu = match.group(1).strip()
-        # Nettoyage minimal des sauts de ligne multiples
         contenu = re.sub(r'\n+', ' ', contenu)
         contenu = re.sub(r'\s+', ' ', contenu)
         return contenu[:max_chars]
-    
     return None
 
+
 def scraper_rcp_medicament(cis: str) -> dict:
-    """
-    Scrape le RCP d'un medicament identifie par son code CIS.
-    Utilise désormais des REGEX pour une extraction précise.
-    """
     url = BASE_URL.format(cis=cis)
     result = {
         "indications": None,
@@ -97,7 +72,6 @@ def scraper_rcp_medicament(cis: str) -> dict:
 
 
 def charger_cache() -> dict:
-    """Charge le cache RCP depuis le disque."""
     if os.path.exists(CACHE_FILE):
         with open(CACHE_FILE, encoding="utf-8") as f:
             return json.load(f)
@@ -105,38 +79,23 @@ def charger_cache() -> dict:
 
 
 def sauvegarder_cache(cache: dict):
-    """Sauvegarde le cache RCP sur le disque."""
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(CACHE_FILE, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
 def scraper_tous_rcp(cis_codes: list, force: bool = False) -> dict:
-    """
-    Scrape les RCP de tous les medicaments de la liste.
-    Utilise un cache pour ne pas re-telecharger les pages deja scraped.
-
-    Args:
-        cis_codes: liste des codes CIS a scraper
-        force: si True, ignore le cache et re-scrape tout
-
-    Returns:
-        Dict {cis_code -> {"contre_indications": str|None, "grossesse_allaitement": str|None}}
-    """
     cache = {} if force else charger_cache()
-
-    # Codes non encore dans le cache
     a_scraper = [cis for cis in cis_codes if cis not in cache]
 
     if not a_scraper:
         print(f"  [OK] Cache RCP complet ({len(cache)} entrees)")
         return cache
 
-    print(f"  [RCP] Scraping de {len(a_scraper)} pages RCP ({MAX_WORKERS} threads)...")
+    print(f"  [RCP] Scraping de {len(a_scraper)} pages ({MAX_WORKERS} threads)...")
 
     def scraper_et_stocker(cis):
-        data = scraper_rcp_medicament(cis)
-        return cis, data
+        return cis, scraper_rcp_medicament(cis)
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futurs = {executor.submit(scraper_et_stocker, cis): cis for cis in a_scraper}
@@ -149,16 +108,12 @@ def scraper_tous_rcp(cis_codes: list, force: bool = False) -> dict:
                 cache[cis] = {"indications": None, "contre_indications": None, "grossesse_allaitement": None}
 
     sauvegarder_cache(cache)
-    trouvees = sum(
-        1 for v in cache.values()
-        if v.get("contre_indications") or v.get("grossesse_allaitement") or v.get("indications")
-    )
+    trouvees = sum(1 for v in cache.values() if v.get("contre_indications") or v.get("grossesse_allaitement") or v.get("indications"))
     print(f"  [OK] Cache RCP sauvegarde : {trouvees}/{len(cache)} avec donnees")
     return cache
 
 
 if __name__ == "__main__":
-    # Test sur 5 medicaments
     test_cis = ["61266250", "62869109", "69103878"]
     resultats = scraper_tous_rcp(test_cis)
     for cis, data in resultats.items():
