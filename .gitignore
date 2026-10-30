@@ -10,7 +10,6 @@ venv/
 data/
 
 # Index FAISS persisté
-index/
 
 # Cache Python
 __pycache__/

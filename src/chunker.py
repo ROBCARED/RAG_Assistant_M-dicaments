@@ -78,9 +78,10 @@ def decouper_texte(texte: str, taille_max: int = 600, overlap: int = 60) -> list
                     fin = pos
                     break
         chunks.append(texte[debut:fin].strip())
-        debut = fin - overlap
-        if debut >= fin:
-            debut = fin
+        if fin >= len(texte):
+            break
+        # Le chevauchement ne doit jamais faire reculer le curseur
+        debut = max(fin - overlap, debut + 1)
     return chunks
 
 
