@@ -477,7 +477,7 @@ with st.sidebar:
     st.markdown("""
     <div class="sb-footer">
         Source &nbsp;&nbsp;&nbsp; BDPM — ANSM<br>
-        LLM &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Llama-3.3-70B (Groq)<br>
+        LLM &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; GPT-OSS-120B (Groq)<br>
         Reranking &nbsp; Cross-Encoder mMiniLM<br>
         Vecteurs &nbsp;&nbsp; multilingual-MiniLM-L12
     </div>

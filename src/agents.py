@@ -9,7 +9,7 @@ load_dotenv()
 SEUIL_CONFIANCE = 0.35
 K_RESULTATS = 5
 K_INITIAL = 15
-MODELE_LLM = "llama-3.3-70b-versatile"
+MODELE_LLM = "openai/gpt-oss-120b"
 MODELE_RERANKER = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
 
 
@@ -54,9 +54,10 @@ class RetrieverAgent:
                 model=MODELE_LLM,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=150,
+                max_tokens=600,
+                reasoning_effort="low",
             )
-            return reponse.choices[0].message.content.strip()
+            return (reponse.choices[0].message.content or question).strip()
         except Exception:
             return question
 
@@ -183,6 +184,7 @@ class GeneratorAgent:
             model=MODELE_LLM,
             messages=messages,
             temperature=0.2,
-            max_tokens=1024,
+            max_tokens=2048,
+            reasoning_effort="low",
         )
         return reponse.choices[0].message.content

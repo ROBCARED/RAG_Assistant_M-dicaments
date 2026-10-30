@@ -16,11 +16,11 @@ Question  →  reformulation (LLM)  →  recherche vectorielle  →  reranking  
 2. **Découpage** : chaque médicament est découpé par section (indications, posologie, effets indésirables, grossesse, contre-indications, interactions…).
 3. **Indexation** : embeddings multilingues (`paraphrase-multilingual-MiniLM-L12-v2`) stockés dans un index **FAISS**.
 4. **Recherche** : un agent *Retriever* reformule la question en tenant compte de l'historique, récupère les 5 passages les plus proches, les réordonne avec un cross-encoder et vérifie un seuil de confiance.
-5. **Génération** : un agent *Generator* rédige la réponse avec **Llama 3.3 70B** (API Groq), uniquement à partir des passages retrouvés.
+5. **Génération** : un agent *Generator* rédige la réponse avec **GPT-OSS 120B** (API Groq), uniquement à partir des passages retrouvés.
 
 ## Stack
 
-Python · sentence-transformers · FAISS · Groq (Llama 3.3 70B) · Streamlit · BeautifulSoup
+Python · sentence-transformers · FAISS · Groq (GPT-OSS 120B) · Streamlit · BeautifulSoup
 
 ## Lancer le projet
 
